@@ -601,160 +601,89 @@ void server(int port) {
 
 // Client Implementation 
 
-void client(const char *host, int port) {
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        perror("socket creation failed");
-        exit(EXIT_FAILURE);
-    }
+// connecting to the server and handling user interaction
+void client(char *server_node, int port) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) { perror("socket failed"); exit(EXIT_FAILURE); }
 
-    struct hostent *server = gethostbyname(host);
+    struct hostent *server = gethostbyname(server_node);
     if (server == NULL) {
-        fprintf(stderr, "ERROR, no such host: %s\n", host);
-        close(sockfd);
-        exit(EXIT_FAILURE);
+        fprintf(stderr, "ERROR, no such host: %s\n", server_node);
+        close(fd); exit(EXIT_FAILURE);
     }
 
-    struct sockaddr_in serv_addr;
-    memset(&serv_addr, 0, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(port);
-    memcpy(&serv_addr.sin_addr.s_addr, server->h_addr_list[0], server->h_length);
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    memcpy(&addr.sin_addr.s_addr, server->h_addr_list[0], server->h_length);
 
-    if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        perror("Failed to connect");
-        close(sockfd);
-        exit(EXIT_FAILURE);
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        perror("connect failed"); close(fd); exit(EXIT_FAILURE);
     }
 
-    printf("Connected to the server at %s:%d.\n\n", host, port);
+    // get and send player name
+    printf("Enter your name: ");
+    char name[NAMESIZE];
+    if (fgets(name, NAMESIZE, stdin) == NULL) {
+        fprintf(stderr, "Failed to get name.\n"); close(fd); exit(EXIT_FAILURE);
+    }
+    name[strcspn(name, "\n")] = 0;
+    if (send(fd, name, strlen(name), 0) < 0) {
+        perror("send name failed"); close(fd); exit(EXIT_FAILURE);
+    }
 
+    printf("Connected as the name %s. Waiting for server to give response...\n", name);
+
+    // main loop to receive messages and send input when prompted
     char buffer[BUFSIZE];
     int n;
-    
-    while (1) {
-        memset(buffer, 0, BUFSIZE);
-        n = recv(sockfd, buffer, BUFSIZE - 1, 0);
-        
-        if (n <= 0) {
-            if (n == 0) {
-                printf("Server closed the connection.\n");
-            } else {
-                perror("recv failed");
-            }
+    while ((n = recv(fd, buffer, BUFSIZE - 1, 0)) > 0) {
+        buffer[n] = '\0';  
+        printf("%s", buffer); // printing server message
+
+        // check if the message contains the prompt for input
+        if (strstr(buffer, "Choose (R/P/S/L/K/Q/M/T):")) {
+            int ipt_sent = 0;
+            while (!ipt_sent) { // loop until valid input is sent for this prompt
+                printf("Your choice: ");
+                fflush(stdout); // ensurin prompt is displayed
+
+                char input_buffer[BUFSIZE];
+                if (fgets(input_buffer, BUFSIZE, stdin) == NULL) {
+                    printf("\nInput error/EOF. Sending 'Q' to quit.\n");
+                    if (send(fd, "Q", 1, 0) < 0) perror("send Q failed");
+                    ipt_sent = 1; 
+                    close(fd); exit(0); 
+                }
+                input_buffer[strcspn(input_buffer, "\n")] = 0; // remove newline
+
+                if (strlen(input_buffer) >= 1) {
+                    char choice = toupper(input_buffer[0]);
+                    if (strchr("RPSLKQMT", choice)) { // check for valid command/move
+                        if (send(fd, &choice, 1, 0) < 0) {
+                            perror("send move failed"); close(fd); exit(1); 
+                        }
+                        ipt_sent = 1; // valid input sent and break inner loop
+                    } else {
+                        printf("Invalid input '%c'. Please choose R/P/S/L/K/Q/M/T.\n", input_buffer[0]);
+                    }
+                } else {
+                    printf("No input has been entered. Please choose R/P/S/L/K/Q/M/T.\n");
+                }
+            } 
+        } else if (strstr(buffer, "GAME OVER") || strstr(buffer, "Server full") ||
+                   strstr(buffer, "Server busy") || strstr(buffer, "Error starting game")) {
+             printf("\n---Game Ended ---\n");
             break;
         }
-        
-        buffer[n] = '\0';
-        printf("%s", buffer);
-        
-        if (strstr(buffer, "Enter") || strstr(buffer, "Choice") || strstr(buffer, "Your move")) {
-            char input[BUFSIZE];
-            if (fgets(input, BUFSIZE, stdin) == NULL) {
-                printf("\nInput error. Exiting.\n");
-                break;
-            }
-            
-            // Remove newline character if present
-            size_t len = strlen(input);
-            if (len > 0 && input[len-1] == '\n') {
-                input[len-1] = '\0';
-                len--;
-            }
-            `
-            if (send(sockfd, input, len, 0) < 0) {
-                perror("send failed");
-                break;
-            }
-        }
-    }
-    
-    close(sockfd);
+    } // End main recv loop
+
+    if (n == 0) printf("\nServer is disconnected.\n");
+    else if (n < 0) perror("recv got failed");
+
+    close(fd);
+    printf("Connection is closed.\n");
 }
-
-
-// void client(char *server_node, int port) {
-//     int fd = socket(AF_INET, SOCK_STREAM, 0);
-//     if (fd < 0) { perror("socket failed"); exit(EXIT_FAILURE); }
-
-//     struct hostent *server = gethostbyname(server_node);
-//     if (server == NULL) {
-//         fprintf(stderr, "ERROR, no such host: %s\n", server_node);
-//         close(fd); exit(EXIT_FAILURE);
-//     }
-
-//     struct sockaddr_in addr;
-//     addr.sin_family = AF_INET;
-//     addr.sin_port = htons(port);
-//     memcpy(&addr.sin_addr.s_addr, server->h_addr_list[0], server->h_length);
-
-//     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-//         perror("connect failed"); close(fd); exit(EXIT_FAILURE);
-//     }
-
-//     // get and send player name
-//     printf("Enter your Move: ");
-//     char name[NAMESIZE];
-//     if (fgets(name, NAMESIZE, stdin) == NULL) {
-//         fprintf(stderr, "Failed to get name.\n"); close(fd); exit(EXIT_FAILURE);
-//     }
-//     name[strcspn(name, "\n")] = 0;
-//     if (send(fd, name, strlen(name), 0) < 0) {
-//         perror("send name failed"); close(fd); exit(EXIT_FAILURE);
-//     }
-
-//     printf("Connected as the name %s. Waiting for server to give response...\n", name);
-
-//     // main loop to receive messages and send input when prompted
-//     char buffer[BUFSIZE];
-//     int n;
-//     while ((n = recv(fd, buffer, BUFSIZE - 1, 0)) > 0) {
-//         buffer[n] = '\0';  
-//         printf("%s", buffer); // printing server message
-
-//         // check if the message contains the prompt for input
-//         if (strstr(buffer, "Choose (R/P/S/L/K/Q/M/T):")) {
-//             int ipt_sent = 0;
-//             while (!ipt_sent) { // loop until valid input is sent for this prompt
-//                 printf("Your choice: ");
-//                 fflush(stdout); // ensurin prompt is displayed
-
-//                 char input_buffer[BUFSIZE];
-//                 if (fgets(input_buffer, BUFSIZE, stdin) == NULL) {
-//                     printf("\nInput error/EOF. Sending 'Q' to quit.\n");
-//                     if (send(fd, "Q", 1, 0) < 0) perror("send Q failed");
-//                     ipt_sent = 1; 
-//                     close(fd); exit(0); 
-//                 }
-//                 input_buffer[strcspn(input_buffer, "\n")] = 0; // remove newline
-
-//                 if (strlen(input_buffer) >= 1) {
-//                     char choice = toupper(input_buffer[0]);
-//                     if (strchr("RPSLKQMT", choice)) { // check for valid command/move
-//                         if (send(fd, &choice, 1, 0) < 0) {
-//                             perror("send move failed"); close(fd); exit(1); 
-//                         }
-//                         ipt_sent = 1; // valid input sent and break inner loop
-//                     } else {
-//                         printf("Invalid input '%c'. Please choose R/P/S/L/K/Q/M/T.\n", input_buffer[0]);
-//                     }
-//                 } else {
-//                     printf("No input has been entered. Please choose R/P/S/L/K/Q/M/T.\n");
-//                 }
-//             } 
-//         } else if (strstr(buffer, "GAME OVER") || strstr(buffer, "Server full") ||
-//                    strstr(buffer, "Server busy") || strstr(buffer, "Error starting game")) {
-//              printf("\n---Game Ended ---\n");
-//             break;
-//         }
-//     } // End main recv loop
-
-//     if (n == 0) printf("\nServer is disconnected.\n");
-//     else if (n < 0) perror("recv got failed");
-
-//     close(fd);
-//     printf("Connection is closed.\n");
-// }
 
 
 // Main Function 
@@ -777,7 +706,7 @@ int main(int argc, char *argv[]) {
         }
         server(port);
     } else if (strcmp(argv[1], "-c") == 0) { // start the client
-        char *hostname = "10.244.219.15"; // default hostname
+        char *hostname = "localhost"; // default hostname
         if (argc == 4) {
             hostname = argv[3]; // use provided hostname if given
         } else if (argc != 3) { // show error if args are wrong for client mode
